@@ -1,0 +1,15 @@
+# mapget: A client/server application for map data retrieval.
+mapget:
+    # From: trace, debug, info, warn, error, critical. Overrides MAPGET_LOG_LEVEL.
+    log-level: trace
+    serve:
+        # Port to start the server on. Default is 0.
+        port: 8080
+        # Datasources for the server in format <host:port>. Can be specified multiple times.
+        datasource-host: ["127.0.0.1:61853"]
+        # Using a persistent cache.
+        cache-type: persistent
+        # Datasource executable paths, including arguments, for the server. Can be specified multiple times.
+        datasource-exe: ./filestore-service 61853
+        # Serve a static web application, in the format [<url-scope>:]<filesystem-path>.
+        webapp: /home/wanch/Project/erdblick/static

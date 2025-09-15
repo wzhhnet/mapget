@@ -1,0 +1,133 @@
+---
+name: 846be77f0d9513c8ab0e9035abb355c2.0
+type: official
+modules:
+  -
+    name: adas
+    version: '2024.07'
+    selected: true
+  -
+    name: characteristics
+    version: '2024.07'
+    selected: true
+  -
+    name: core
+    version: '2024.07'
+    selected: true
+  -
+    name: display
+    version: '2024.07'
+    selected: true
+  -
+    name: display.details
+    version: '2024.07'
+    selected: true
+  -
+    name: display.reference
+    version: '2024.05'
+    selected: true
+  -
+    name: drivepath
+    version: '2024.07'
+    selected: true
+  -
+    name: instructions
+    version: '2024.07'
+    selected: true
+  -
+    name: lane
+    version: '2024.07'
+    selected: true
+  -
+    name: lane.reference
+    version: '2024.07'
+    selected: true
+  -
+    name: localization
+    version: '2024.05'
+    selected: true
+  -
+    name: name
+    version: '2024.07'
+    selected: true
+  -
+    name: poi
+    version: '2024.07'
+    selected: true
+  -
+    name: poi.reference
+    version: '2024.07'
+    selected: true
+  -
+    name: registry
+    version: '2024.03'
+    selected: true
+  -
+    name: road
+    version: '2024.05'
+    selected: true
+  -
+    name: road.reference
+    version: '2024.05'
+    selected: true
+  -
+    name: routing
+    version: '2024.07'
+    selected: true
+  -
+    name: routingdata
+    version: '2024.07'
+    selected: true
+  -
+    name: rules
+    version: '2024.07'
+    selected: true
+  -
+    name: search
+    version: '2024.07'
+    selected: true
+  -
+    name: signs
+    version: '2024.03'
+    selected: true
+  -
+    name: smart
+    version: '2024.05'
+    selected: true
+  -
+    name: system
+    version: '2024.03'
+    selected: true
+  -
+    name: traffic
+    version: '2024.07'
+    selected: true
+  -
+    name: vehicle
+    version: '2024.03'
+    selected: true
+  -
+    name: vehicle.reference
+    version: '2024.03'
+    selected: true
+  -
+    name: venue
+    version: '2024.05'
+    selected: true
+  -
+    name: venue.details
+    version: '2024.07'
+    selected: true
+  -
+    name: venue.reference
+    version: '2024.03'
+    selected: true
+title: Adas 2024.07, Characteristics 2024.07, Core 2024.07, Display 2024.07, Display
+  Details 2024.07, Display Reference 2024.05, Drivepath 2024.07, Instructions 2024.07,
+  Lane 2024.07, Lane Reference 2024.07, Localization 2024.05, Name 2024.07, Poi 2024.07,
+  Poi Reference 2024.07, Registry 2024.03, Road 2024.05, Road Reference 2024.05, Routing
+  2024.07, Routingdata 2024.07, Rules 2024.07, Search 2024.07, Signs 2024.03, Smart
+  2024.05, System 2024.03, Traffic 2024.07, Vehicle 2024.03, Vehicle Reference 2024.03,
+  Venue 2024.05, Venue Details 2024.07, Venue Reference 2024.03
+zserio: 2.14.0
+...
