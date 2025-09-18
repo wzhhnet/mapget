@@ -12,6 +12,25 @@
 #include "mapget/http-datasource/datasource-server.h"
 #include "mapget/log.h"
 
+template <typename VAL> struct ValidityAccessor;
+
+template <>
+struct ValidityAccessor<::nds::road::reference::types::RoadRangeValidity> {
+    static auto &get(const ::nds::road::reference::types::RoadRangeValidity &v)
+    {
+        return v.ranges;
+    }
+};
+
+template <>
+struct ValidityAccessor<::nds::road::reference::types::RoadPositionValidity> {
+    static auto &
+    get(const ::nds::road::reference::types::RoadPositionValidity &v)
+    {
+        return v.positions;
+    }
+};
+
 namespace mapget
 {
 
@@ -30,12 +49,25 @@ class FileStoreDataSource
     using AttrMapList =
         ::nds::core::attributemap::AttributeMapList<REF, VAL, ATTR_T, ATTR_V,
                                                     PROP_T, PROP_V>;
+    template <typename REF, typename VAL, typename ATTR_T, typename ATTR_V,
+              typename PROP_T, typename PROP_V>
+    using AttrMap =
+        ::nds::core::attributemap::AttributeMap<REF, VAL, ATTR_T, ATTR_V,
+                                                PROP_T, PROP_V>;
 
     using RulesRoadRangeAttrMap = ::nds::core::attributemap::AttributeMap<
         ::nds::road::reference::types::RoadReference,
         ::nds::road::reference::types::RoadRangeValidity,
         ::nds::rules::attributes::RulesRoadRangeAttributeType,
         ::nds::rules::attributes::RulesRoadRangeAttributeValue,
+        ::nds::rules::properties::RulesPropertyType,
+        ::nds::rules::properties::RulesPropertyValue>;
+
+    using RulesRoadPositionAttMap = ::nds::core::attributemap::AttributeMap<
+        ::nds::road::reference::types::RoadReference,
+        ::nds::road::reference::types::RoadPositionValidity,
+        ::nds::rules::attributes::RulesRoadPositionAttributeType,
+        ::nds::rules::attributes::RulesRoadPositionAttributeValue,
         ::nds::rules::properties::RulesPropertyType,
         ::nds::rules::properties::RulesPropertyValue>;
 
@@ -168,9 +200,12 @@ class FileStoreDataSource
                               nds::rules::layer::RoadRulesLayer const &layer)
     {
         // ::zserio::Optional<::nds::rules::instantiations::RulesRoadRangeAttributeMapList>
-        if (layer.roadRangeAttributeMaps) {
+        if (layer.roadRangeAttributeMaps)
             fillByAttrMapList(tile, layer.shift, *layer.roadRangeAttributeMaps);
-        }
+
+        if (layer.roadPositionAttributeMaps)
+            fillByAttrMapList(tile, layer.shift,
+                              *layer.roadPositionAttributeMaps);
     }
 
     // The function to load the DataSourceInfo from a JSON file
@@ -279,15 +314,17 @@ class FileStoreDataSource
         }
     }
 
-    void fillByAttrMap(TileFeatureLayer::Ptr const &tile,
-                       ::nds::core::geometry::CoordShift shift,
-                       const RulesRoadRangeAttrMap &attrMap)
+    template <typename REF, typename VAL, typename ATTR_T, typename ATTR_V,
+              typename PROP_T, typename PROP_V>
+    void fillByAttrMap(
+        TileFeatureLayer::Ptr const &tile,
+        ::nds::core::geometry::CoordShift shift,
+        const AttrMap<REF, VAL, ATTR_T, ATTR_V, PROP_T, PROP_V> &attrMap)
     {
         using namespace ::nds::rules::attributes;
         using namespace ::nds::core::attributemap;
         auto attrCode = static_cast<size_t>(attrMap.attributeTypeCode);
-        auto attrName =
-            zserio::EnumTraits<RulesRoadRangeAttributeType>().names[attrCode];
+        auto attrName = zserio::EnumTraits<ATTR_T>().names[attrCode];
         for (FeatureIterator i = 0; i < attrMap.feature; ++i) {
             const auto &featRef = attrMap.featureReferences[i];
             uint32_t roadId;
@@ -341,39 +378,96 @@ class FileStoreDataSource
         using namespace ::nds::road::reference::types;
         using EnumType = std::decay_t<decltype(validity.type)>;
         if (validity.type == EnumType::COMPLETE) return;
-        if (!validity.ranges.has_value()) return;
-        for (const RoadRangeChoice &range : *validity.ranges) {
+
+        auto &optVals = ValidityAccessor<VAL>::get(validity);
+        if (!optVals.has_value()) return;
+        for (const auto &val : *optVals) {
             switch (validity.type) {
-            case EnumType::POSITION: {
-                const auto &v =
-                    range.get<RoadRangeChoice::Tag::validityRange>();
-                attr->validity()->newRange(
-                    {strun32ToDegree(v.start.position.longitude << shift),
-                     strun32ToDegree(v.start.position.latitude << shift)},
-                    {strun32ToDegree(v.end.position.longitude << shift),
-                     strun32ToDegree(v.end.position.latitude << shift)});
+            case EnumType::POSITION:
+                fillRoadVilidity(attr, shift, val);
                 break;
-            }
-            case EnumType::LENGTH: {
-                const auto &v = range.get<RoadRangeChoice::Tag::lengthRange>();
-                attr->validity()->newRange(
-                    Validity::GeometryOffsetType::RelativeLengthOffset,
-                    static_cast<int32_t>(v.range.start.position),
-                    static_cast<int32_t>(v.range.end.position));
+
+            case EnumType::LENGTH:
+                fillRoadLength(attr, val);
                 break;
-            }
-            case EnumType::GEOMETRY: {
-                const auto &v =
-                    range.get<RoadRangeChoice::Tag::geometryRange>();
-                attr->validity()->newRange(
-                    Validity::GeometryOffsetType::GeoPosOffset,
-                    static_cast<int32_t>(v.start), static_cast<int32_t>(v.end));
+
+            case EnumType::GEOMETRY:
+                fillRoadGeometry(attr, val);
                 break;
-            }
+
             default:
                 break;
             }
         }
+    }
+
+    void
+    fillRoadVilidity(model_ptr<Attribute> &attr,
+                     ::nds::core::geometry::CoordShift shift,
+                     const ::nds::road::reference::types::RoadRangeChoice &val)
+    {
+        using namespace ::nds::road::reference::types;
+        const auto &v = val.get<RoadRangeChoice::Tag::validityRange>();
+        attr->validity()->newRange(
+            {strun32ToDegree(v.start.position.longitude << shift),
+             strun32ToDegree(v.start.position.latitude << shift)},
+            {strun32ToDegree(v.end.position.longitude << shift),
+             strun32ToDegree(v.end.position.latitude << shift)});
+    }
+
+    void fillRoadVilidity(
+        model_ptr<Attribute> &attr, ::nds::core::geometry::CoordShift shift,
+        const ::nds::road::reference::types::RoadPositionChoice &val)
+    {
+        using namespace ::nds::road::reference::types;
+        const auto &v = val.get<RoadPositionChoice::Tag::validityPosition>();
+        attr->validity()->newPoint(
+            {strun32ToDegree(v.position.longitude << shift),
+             strun32ToDegree(v.position.latitude << shift)});
+    }
+
+    void
+    fillRoadLength(model_ptr<Attribute> &attr,
+                   const ::nds::road::reference::types::RoadRangeChoice &val)
+    {
+        using namespace ::nds::road::reference::types;
+        const auto &v = val.get<RoadRangeChoice::Tag::lengthRange>();
+        attr->validity()->newRange(
+            Validity::GeometryOffsetType::RelativeLengthOffset,
+            static_cast<int32_t>(v.range.start.position),
+            static_cast<int32_t>(v.range.end.position));
+    }
+
+    void
+    fillRoadLength(model_ptr<Attribute> &attr,
+                   const ::nds::road::reference::types::RoadPositionChoice &val)
+    {
+        using namespace ::nds::road::reference::types;
+        const auto &v = val.get<RoadPositionChoice::Tag::lengthPosition>();
+        attr->validity()->newPoint(
+            Validity::GeometryOffsetType::RelativeLengthOffset,
+            static_cast<int32_t>(v.position.position));
+    }
+
+    void
+    fillRoadGeometry(model_ptr<Attribute> &attr,
+                     const ::nds::road::reference::types::RoadRangeChoice &val)
+    {
+        using namespace ::nds::road::reference::types;
+        const auto &v = val.get<RoadRangeChoice::Tag::geometryRange>();
+        attr->validity()->newRange(Validity::GeometryOffsetType::GeoPosOffset,
+                                   static_cast<int32_t>(v.start),
+                                   static_cast<int32_t>(v.end));
+    }
+
+    void fillRoadGeometry(
+        model_ptr<Attribute> &attr,
+        const ::nds::road::reference::types::RoadPositionChoice &val)
+    {
+        using namespace ::nds::road::reference::types;
+        const auto &v = val.get<RoadPositionChoice::Tag::geometryPosition>();
+        attr->validity()->newPoint(Validity::GeometryOffsetType::GeoPosOffset,
+                                   static_cast<int32_t>(v));
     }
 
     uint32_t getTileId(TileFeatureLayer::Ptr const &tile)
