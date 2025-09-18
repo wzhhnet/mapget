@@ -155,6 +155,18 @@ class FileStoreDataSource
             feat->attributes()->addField("length",
                                          static_cast<int64_t>(road.length));
         }
+        auto &inters = layer.intersectionList.intersections;
+        auto shift = layer.coordShift;
+        for (const auto &inter : inters) {
+            auto feat = tile->newFeature("Intersection",
+                                         {{"intersectionId", inter.id}});
+            auto geom = feat->geom()->newGeometry(GeomType::Points);
+            geom->append({strun32ToDegree(inter.position.longitude << shift),
+                          strun32ToDegree(inter.position.latitude << shift)});
+            feat->attributes()->addBool("isArtificial", inter.isArtificial);
+
+            // TODO:
+        }
     }
 
     void
@@ -206,39 +218,57 @@ class FileStoreDataSource
         if (layer.roadPositionAttributeMaps)
             fillByAttrMapList(tile, layer.shift,
                               *layer.roadPositionAttributeMaps);
+        //TODO
     }
 
     // The function to load the DataSourceInfo from a JSON file
     static DataSourceInfo loadDataSourceInfoFromJson()
     {
         return DataSourceInfo::fromJson(R"(
-            {
-                "mapId": "Nds.live",
-                "layers": {
-                    "RoadLayer": {
-                        "featureTypes": [
-                            {
-                                "name": "Road",
-                                "uniqueIdCompositions": [
-                                    [
-                                        {
-                                            "partId": "tileId",
-                                            "description": "String which identifies the map area.",
-                                            "datatype": "U32"
-                                        },
-                                        {
-                                            "partId": "roadId",
-                                            "description": "Globally Unique 32b integer.",
-                                            "datatype": "U32"
-                                        }
-                                    ]
+        {
+            "mapId": "Nds.live",
+            "layers": {
+                "RoadLayer": {
+                    "featureTypes": [
+                        {
+                            "name": "Road",
+                            "uniqueIdCompositions": [
+                                [
+                                    {
+                                        "partId": "tileId",
+                                        "description": "String which identifies the map area.",
+                                        "datatype": "U32"
+                                    },
+                                    {
+                                        "partId": "roadId",
+                                        "description": "Globally Unique 32b integer.",
+                                        "datatype": "U32"
+                                    }
                                 ]
-                            }
-                        ]
-                    }
+                            ]
+                        },
+                        {
+                            "name": "Intersection",
+                            "uniqueIdCompositions": [
+                                [
+                                    {
+                                        "partId": "tileId",
+                                        "description": "String which identifies the map area.",
+                                        "datatype": "U32"
+                                    },
+                                    {
+                                        "partId": "intersectionId",
+                                        "description": "Globally Unique 32b integer for intersection.",
+                                        "datatype": "U32"
+                                    }
+                                ]
+                            ]
+                        }
+                    ]
                 }
             }
-        )"_json);
+        }
+    )"_json);
     }
 
     // The function to start the server
