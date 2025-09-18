@@ -169,7 +169,7 @@ class FileStoreDataSource
     {
         // ::zserio::Optional<::nds::rules::instantiations::RulesRoadRangeAttributeMapList>
         if (layer.roadRangeAttributeMaps) {
-            fillByAttrMapList(tile, *layer.roadRangeAttributeMaps);
+            fillByAttrMapList(tile, layer.shift, *layer.roadRangeAttributeMaps);
         }
     }
 
@@ -270,15 +270,17 @@ class FileStoreDataSource
     template <typename REF, typename VAL, typename ATTR_T, typename ATTR_V,
               typename PROP_T, typename PROP_V>
     void fillByAttrMapList(TileFeatureLayer::Ptr const &tile,
+                           ::nds::core::geometry::CoordShift shift,
                            const AttrMapList<REF, VAL, ATTR_T, ATTR_V, PROP_T,
                                              PROP_V> &attrMapList)
     {
         for (const auto &attrMap : attrMapList.maps) {
-            fillByAttrMap(tile, attrMap);
+            fillByAttrMap(tile, shift, attrMap);
         }
     }
 
     void fillByAttrMap(TileFeatureLayer::Ptr const &tile,
+                       ::nds::core::geometry::CoordShift shift,
                        const RulesRoadRangeAttrMap &attrMap)
     {
         using namespace ::nds::rules::attributes;
@@ -288,39 +290,90 @@ class FileStoreDataSource
             zserio::EnumTraits<RulesRoadRangeAttributeType>().names[attrCode];
         for (FeatureIterator i = 0; i < attrMap.feature; ++i) {
             const auto &featRef = attrMap.featureReferences[i];
-            if (featRef.roadId) {
-                auto feat = tile->find(
-                    "Road", KeyValueViewPairs{{"tileId", getTileId(tile)},
-                                              {"roadId", featRef.roadId->id}});
-                model_ptr<AttributeLayer> attrLayer;
-                feat->attributeLayers()->forEachLayer([&](std::string_view name, model_ptr<AttributeLayer> const& layer)->bool {
+            uint32_t roadId;
+            Validity::Direction dir;
+            if (featRef.isDirected) {
+                zserio::View v(featRef.directedRoadReference.value());
+                roadId = static_cast<uint32_t>(v.getId());
+                dir = v.isPositive() ? Validity::Direction::Positive
+                                     : Validity::Direction::Negative;
+            } else {
+                roadId = featRef.roadId->id;
+            }
+
+            auto feat = tile->find(
+                "Road", KeyValueViewPairs{{"tileId", getTileId(tile)},
+                                          {"roadId", roadId}});
+            model_ptr<AttributeLayer> attrLayer;
+            feat->attributeLayers()->forEachLayer(
+                [&](std::string_view name,
+                    model_ptr<AttributeLayer> const &layer) -> bool {
                     if (name == "RoadRulesLayer") {
                         attrLayer = layer;
                         return true;
                     }
                     return false;
                 });
-                if (!attrLayer)
-                    attrLayer = feat->attributeLayers()->newLayer("RoadRulesLayer");
-                auto attr = attrLayer->newAttribute(attrName);
-                const auto &attrIt = attrMap.featureValuePtr[i];
-                const auto &attrVal = attrMap.attributeValues[attrIt];
-                auto valJsonStr = zserio::toJsonString(attrVal, 0);
-                log().info("valJsonStr={}", valJsonStr);
-                auto valJson = nlohmann::json::parse(valJsonStr);
-                auto it = valJson.find("attributeValue");
-                if (it != valJson.end()) {
-                    auto subit = it.value().begin();
-                    for (; subit !=it.value().end(); ++subit)
-                        attr->addField(subit.key(), subit.value().dump());
-                }
+            if (!attrLayer)
+                attrLayer = feat->attributeLayers()->newLayer("RoadRulesLayer");
+
+            const auto &attrRange = attrMap.featureValidities[i];
+            const auto &attrIt = attrMap.featureValuePtr[i];
+            const auto &attrVal = attrMap.attributeValues[attrIt];
+            auto attr = attrLayer->newAttribute(attrName);
+            if (dir != Validity::Empty) attr->validity()->newDirection(dir);
+            setAttributeValidity(attr, shift, attrRange);
+            auto valJsonStr = zserio::toJsonString(attrVal, 0);
+            auto valJson = nlohmann::json::parse(valJsonStr);
+            auto it = valJson.find("attributeValue");
+            if (it != valJson.end()) {
+                for (auto &[k, v] : it.value().items())
+                    if (!v.empty()) attr->addField(k, v.dump());
             }
         }
     }
 
-    void fillAttrByJson(model_ptr<Attribute> &attr, nlohmann::json const &j)
+    template <typename VAL>
+    void setAttributeValidity(model_ptr<Attribute> &attr,
+                              ::nds::core::geometry::CoordShift shift,
+                              const VAL &validity)
     {
-        //
+        using namespace ::nds::road::reference::types;
+        using EnumType = std::decay_t<decltype(validity.type)>;
+        if (validity.type == EnumType::COMPLETE) return;
+        if (!validity.ranges.has_value()) return;
+        for (const RoadRangeChoice &range : *validity.ranges) {
+            switch (validity.type) {
+            case EnumType::POSITION: {
+                const auto &v =
+                    range.get<RoadRangeChoice::Tag::validityRange>();
+                attr->validity()->newRange(
+                    {strun32ToDegree(v.start.position.longitude << shift),
+                     strun32ToDegree(v.start.position.latitude << shift)},
+                    {strun32ToDegree(v.end.position.longitude << shift),
+                     strun32ToDegree(v.end.position.latitude << shift)});
+                break;
+            }
+            case EnumType::LENGTH: {
+                const auto &v = range.get<RoadRangeChoice::Tag::lengthRange>();
+                attr->validity()->newRange(
+                    Validity::GeometryOffsetType::RelativeLengthOffset,
+                    static_cast<int32_t>(v.range.start.position),
+                    static_cast<int32_t>(v.range.end.position));
+                break;
+            }
+            case EnumType::GEOMETRY: {
+                const auto &v =
+                    range.get<RoadRangeChoice::Tag::geometryRange>();
+                attr->validity()->newRange(
+                    Validity::GeometryOffsetType::GeoPosOffset,
+                    static_cast<int32_t>(v.start), static_cast<int32_t>(v.end));
+                break;
+            }
+            default:
+                break;
+            }
+        }
     }
 
     uint32_t getTileId(TileFeatureLayer::Ptr const &tile)
