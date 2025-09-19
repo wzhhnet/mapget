@@ -12,6 +12,9 @@
 #include "mapget/http-datasource/datasource-server.h"
 #include "mapget/log.h"
 
+namespace mapget
+{
+
 template <typename VAL> struct ValidityAccessor;
 
 template <>
@@ -30,9 +33,6 @@ struct ValidityAccessor<::nds::road::reference::types::RoadPositionValidity> {
         return v.positions;
     }
 };
-
-namespace mapget
-{
 
 // Class to encapsulate all logic of our data source
 class FileStoreDataSource
@@ -68,6 +68,14 @@ class FileStoreDataSource
         ::nds::road::reference::types::RoadPositionValidity,
         ::nds::rules::attributes::RulesRoadPositionAttributeType,
         ::nds::rules::attributes::RulesRoadPositionAttributeValue,
+        ::nds::rules::properties::RulesPropertyType,
+        ::nds::rules::properties::RulesPropertyValue>;
+
+    using RulesTransitionAttrMap = ::nds::core::attributemap::AttributeMap<
+        ::nds::road::reference::types::TransitionReference,
+        ::nds::core::attributemap::Validity,
+        ::nds::rules::attributes::RulesTransitionAttributeType,
+        ::nds::rules::attributes::RulesTransitionAttributeValue,
         ::nds::rules::properties::RulesPropertyType,
         ::nds::rules::properties::RulesPropertyValue>;
 
@@ -160,12 +168,29 @@ class FileStoreDataSource
         for (const auto &inter : inters) {
             auto feat = tile->newFeature("Intersection",
                                          {{"intersectionId", inter.id}});
-            auto geom = feat->geom()->newGeometry(GeomType::Points);
-            geom->append({strun32ToDegree(inter.position.longitude << shift),
-                          strun32ToDegree(inter.position.latitude << shift)});
+            feat->addPoint({strun32ToDegree(inter.position.longitude << shift),
+                            strun32ToDegree(inter.position.latitude << shift)});
             feat->attributes()->addBool("isArtificial", inter.isArtificial);
-
-            // TODO:
+            feat->attributes()->addField("zLevel",
+                                         static_cast<int16_t>(inter.zLevel));
+            for (const auto &roadRef : inter.connectedRoads) {
+                zserio::View v(roadRef.road);
+#if 0
+                auto attr =
+                    attrLayer->newAttribute("IntersectionRoadReference");
+                attr->addField("roadId", static_cast<int64_t>(v.getId()));
+                if (v.isPositive()) attr->addBool("isPositive", true);
+                if (v.isNegative()) attr->addBool("isNegative", true);
+                if (roadRef.angle.has_value())
+                    attr->addField("angle",
+                                   static_cast<int16_t>(roadRef.angle.value()));
+#else
+                auto ref = tile->find(
+                    "Road", KeyValueViewPairs{{"tileId", getTileId(tile)},
+                                              {"roadId", v.getId()}});
+                if (ref) feat->addRelation("connectedRoads", ref->id());
+#endif
+            }
         }
     }
 
@@ -218,7 +243,11 @@ class FileStoreDataSource
         if (layer.roadPositionAttributeMaps)
             fillByAttrMapList(tile, layer.shift,
                               *layer.roadPositionAttributeMaps);
-        //TODO
+
+        if (layer.transitionAttributeMaps)
+            fillByAttrMapList(tile, layer.shift,
+                              *layer.transitionAttributeMaps);
+        // TODO
     }
 
     // The function to load the DataSourceInfo from a JSON file
@@ -400,6 +429,13 @@ class FileStoreDataSource
         }
     }
 
+    void fillByAttrMap(TileFeatureLayer::Ptr const &tile,
+                       ::nds::core::geometry::CoordShift shift,
+                       const RulesTransitionAttrMap &attrMap)
+    {
+        // TODO
+    }
+
     template <typename VAL>
     void setAttributeValidity(model_ptr<Attribute> &attr,
                               ::nds::core::geometry::CoordShift shift,
@@ -510,5 +546,13 @@ class FileStoreDataSource
         return 0;
     }
 };
+
+/// Explicit specialization template function
+template <>
+void FileStoreDataSource::fillByAttrMap(
+    TileFeatureLayer::Ptr const &tile, ::nds::core::geometry::CoordShift shift,
+    const FileStoreDataSource::RulesTransitionAttrMap &attrMap)
+{
+}
 
 } // namespace mapget
