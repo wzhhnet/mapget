@@ -433,7 +433,75 @@ class FileStoreDataSource
                        ::nds::core::geometry::CoordShift shift,
                        const RulesTransitionAttrMap &attrMap)
     {
-        // TODO
+        using namespace ::nds::rules::attributes;
+        using namespace ::nds::core::attributemap;
+        auto attrCode = static_cast<size_t>(attrMap.attributeTypeCode);
+        auto attrName =
+            zserio::EnumTraits<RulesTransitionAttributeType>().names[attrCode];
+        for (FeatureIterator i = 0; i < attrMap.feature; ++i) {
+            const auto &featRef = attrMap.featureReferences[i];
+            /// Transition reference to a complete intersection or a list of
+            /// transitions within one intersection.
+            if (featRef.intersectionTransition.has_value()) {
+                auto trans = featRef.intersectionTransition.value();
+                auto feat =
+                    tile->find("Intersection",
+                               KeyValueViewPairs{
+                                   {"tileId", getTileId(tile)},
+                                   {"intersectionId", trans.intersectionId}});
+                model_ptr<AttributeLayer> attrLayer;
+                feat->attributeLayers()->forEachLayer(
+                    [&](std::string_view name,
+                        model_ptr<AttributeLayer> const &layer) -> bool {
+                        if (name == "RoadRulesLayer") {
+                            attrLayer = layer;
+                            return true;
+                        }
+                        return false;
+                    });
+                if (!attrLayer)
+                    attrLayer =
+                        feat->attributeLayers()->newLayer("RoadRulesLayer");
+                auto attr = attrLayer->newAttribute(attrName);
+                if (trans.transitionNumber.has_value()) {
+                    for (const auto &num : trans.transitionNumber.value())
+                        attr->addField("transitionNumber", num);
+                }
+            }
+            /// Transition reference to a sequence of roads within the same
+            /// tile.
+            if (featRef.transitionPathReference.has_value()) {
+                auto transPaths = featRef.transitionPathReference.value();
+                if (!transPaths.numRoads) break;
+
+                const auto &entryRoad = transPaths.roads[0];
+                zserio::View entryRoadView(entryRoad);
+                auto feat = tile->find(
+                    "Road",
+                    KeyValueViewPairs{{"tileId", getTileId(tile)},
+                                      {"roadId", entryRoadView.getId()}});
+                model_ptr<AttributeLayer> attrLayer;
+                feat->attributeLayers()->forEachLayer(
+                    [&](std::string_view name,
+                        model_ptr<AttributeLayer> const &layer) -> bool {
+                        if (name == "RoadRulesLayer") {
+                            attrLayer = layer;
+                            return true;
+                        }
+                        return false;
+                    });
+                if (!attrLayer)
+                    attrLayer =
+                        feat->attributeLayers()->newLayer("RoadRulesLayer");
+                auto attr = attrLayer->newAttribute(attrName);
+                for (const auto &road : transPaths.roads) {
+                    attr->addField("transitionPathReference",
+                                   static_cast<int64_t>(road.value));
+                }
+            }
+            /// TODO: transitionGeoPathReference
+        }
+ 
     }
 
     template <typename VAL>
