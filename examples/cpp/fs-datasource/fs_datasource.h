@@ -404,10 +404,15 @@ class FileStoreDataSource
                 const auto &attrRange = attrMap.featureValidities[i];
                 const auto &attrIt = attrMap.featureValuePtr[i];
                 const auto &attrVal = attrMap.attributeValues[attrIt];
+                const auto &attrConds = attrMap.attributeConditions[attrIt];
                 auto attr = attrLayer->newAttribute(attrName);
                 if (dir != Validity::Empty) attr->validity()->newDirection(dir);
                 setAttributeValidity(attr, shift, attrRange);
-                fillAttribute(attr, attrVal);
+                attr->addField("attributeValue",
+                               buildNode(attrVal.attributeValue, tile));
+                /// Conditions
+                if (attrConds.numConditions)
+                    attr->addField("conditions", buildNode(attrConds, tile));
             }
         }
     }
@@ -462,10 +467,8 @@ class FileStoreDataSource
                 if (attrLayer) {
                     auto attr = attrLayer->newAttribute("TransitionReference");
                     attr->addField("TransitionReferenceType", transRefType);
-                    auto arr = tile->newArray(transPaths.numRoads);
-                    for (const auto &road : transPaths.roads)
-                        arr->append(static_cast<int64_t>(road.value));
-                    attr->addField("transitionPathReference", arr);
+                    attr->addField("transitionPathReference",
+                                   buildNode(transPaths, tile));
                 }
             }
             /// TODO: transitionGeoPathReference
@@ -475,8 +478,13 @@ class FileStoreDataSource
                 const auto &attrRange = attrMap.featureValidities[i];
                 const auto &attrIt = attrMap.featureValuePtr[i];
                 const auto &attrVal = attrMap.attributeValues[attrIt];
+                const auto &attrConds = attrMap.attributeConditions[attrIt];
                 auto attr = attrLayer->newAttribute(attrName);
-                fillAttribute(attr, attrVal);
+                attr->addField("attributeValue",
+                               buildNode(attrVal.attributeValue, tile));
+                /// Conditions
+                if (attrConds.numConditions)
+                    attr->addField("conditions", buildNode(attrConds, tile));
             }
         }
     }
@@ -611,18 +619,52 @@ class FileStoreDataSource
         return attrLayer;
     }
 
-    template <typename ATTR_T, typename ATTR_V>
-    void fillAttribute(
-        model_ptr<Attribute> &attr,
-        ::nds::core::attributemap::Attribute<ATTR_T, ATTR_V> const &attrVal)
+    template <typename T>
+    simfil::ModelNode::Ptr buildNode(const T &v,
+                                     TileFeatureLayer::Ptr const &tile)
     {
-        auto valJsonStr = zserio::toJsonString(attrVal, 0);
-        auto valJson = nlohmann::json::parse(valJsonStr);
-        auto it = valJson.find("attributeValue");
-        if (it != valJson.end()) {
-            for (auto const &[k, v] : it.value().items())
-                if (!v.empty()) attr->addField(k, v.dump());
+        auto str = zserio::toJsonString(v, 0);
+        auto j = nlohmann::json::parse(str);
+        return buildNode(j, tile);
+    }
+
+    simfil::ModelNode::Ptr buildNode(const nlohmann::json &j,
+                                     TileFeatureLayer::Ptr const &tile)
+    {
+        using namespace nlohmann;
+
+        switch (j.type()) {
+        case json::value_t::null:
+            return {};
+        case json::value_t::boolean:
+            return tile->newSmallValue(j.get<bool>());
+        case json::value_t::number_float:
+            return tile->newValue(j.get<double>());
+        case json::value_t::number_unsigned:
+            return tile->newValue((int64_t)j.get<uint64_t>());
+        case json::value_t::number_integer:
+            return tile->newValue(j.get<int64_t>());
+        case json::value_t::string:
+            return tile->newValue(
+                (StringId)tile->strings()->emplace(j.get<std::string>()));
+        default:
+            break;
         }
+
+        if (j.is_object()) {
+            auto object = tile->newObject(j.size());
+            for (auto &&[key, value] : j.items())
+                object->addField(key, buildNode(value, tile));
+            return object;
+        }
+
+        if (j.is_array()) {
+            auto array = tile->newArray(j.size());
+            for (const auto &value : j) array->append(buildNode(value, tile));
+            return array;
+        }
+
+        return {};
     }
 };
 
