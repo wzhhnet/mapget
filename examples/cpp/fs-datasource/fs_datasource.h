@@ -396,35 +396,18 @@ class FileStoreDataSource
             } else {
                 roadId = featRef.roadId->id;
             }
-
-            auto feat = tile->find(
-                "Road", KeyValueViewPairs{{"tileId", getTileId(tile)},
-                                          {"roadId", roadId}});
-            model_ptr<AttributeLayer> attrLayer;
-            feat->attributeLayers()->forEachLayer(
-                [&](std::string_view name,
-                    model_ptr<AttributeLayer> const &layer) -> bool {
-                    if (name == "RoadRulesLayer") {
-                        attrLayer = layer;
-                        return true;
-                    }
-                    return false;
-                });
-            if (!attrLayer)
-                attrLayer = feat->attributeLayers()->newLayer("RoadRulesLayer");
-
-            const auto &attrRange = attrMap.featureValidities[i];
-            const auto &attrIt = attrMap.featureValuePtr[i];
-            const auto &attrVal = attrMap.attributeValues[attrIt];
-            auto attr = attrLayer->newAttribute(attrName);
-            if (dir != Validity::Empty) attr->validity()->newDirection(dir);
-            setAttributeValidity(attr, shift, attrRange);
-            auto valJsonStr = zserio::toJsonString(attrVal, 0);
-            auto valJson = nlohmann::json::parse(valJsonStr);
-            auto it = valJson.find("attributeValue");
-            if (it != valJson.end()) {
-                for (auto &[k, v] : it.value().items())
-                    if (!v.empty()) attr->addField(k, v.dump());
+            auto attrLayer =
+                getRoadRuleslayer(tile, "Road",
+                                  KeyValueViewPairs{{"tileId", getTileId(tile)},
+                                                    {"roadId", roadId}});
+            if (attrLayer) {
+                const auto &attrRange = attrMap.featureValidities[i];
+                const auto &attrIt = attrMap.featureValuePtr[i];
+                const auto &attrVal = attrMap.attributeValues[attrIt];
+                auto attr = attrLayer->newAttribute(attrName);
+                if (dir != Validity::Empty) attr->validity()->newDirection(dir);
+                setAttributeValidity(attr, shift, attrRange);
+                fillAttribute(attr, attrVal);
             }
         }
     }
@@ -435,37 +418,34 @@ class FileStoreDataSource
     {
         using namespace ::nds::rules::attributes;
         using namespace ::nds::core::attributemap;
+        using namespace ::nds::road::reference::types;
         auto attrCode = static_cast<size_t>(attrMap.attributeTypeCode);
         auto attrName =
             zserio::EnumTraits<RulesTransitionAttributeType>().names[attrCode];
         for (FeatureIterator i = 0; i < attrMap.feature; ++i) {
             const auto &featRef = attrMap.featureReferences[i];
+            auto transRefType = zserio::EnumTraits<TransitionReferenceType>()
+                                    .names[static_cast<size_t>(featRef.type)];
+
+            model_ptr<AttributeLayer> attrLayer;
             /// Transition reference to a complete intersection or a list of
             /// transitions within one intersection.
             if (featRef.intersectionTransition.has_value()) {
                 auto trans = featRef.intersectionTransition.value();
-                auto feat =
-                    tile->find("Intersection",
-                               KeyValueViewPairs{
-                                   {"tileId", getTileId(tile)},
-                                   {"intersectionId", trans.intersectionId}});
-                model_ptr<AttributeLayer> attrLayer;
-                feat->attributeLayers()->forEachLayer(
-                    [&](std::string_view name,
-                        model_ptr<AttributeLayer> const &layer) -> bool {
-                        if (name == "RoadRulesLayer") {
-                            attrLayer = layer;
-                            return true;
-                        }
-                        return false;
-                    });
-                if (!attrLayer)
-                    attrLayer =
-                        feat->attributeLayers()->newLayer("RoadRulesLayer");
-                auto attr = attrLayer->newAttribute(attrName);
-                if (trans.transitionNumber.has_value()) {
-                    for (const auto &num : trans.transitionNumber.value())
-                        attr->addField("transitionNumber", num);
+                attrLayer = getRoadRuleslayer(
+                    tile, "Intersection",
+                    KeyValueViewPairs{
+                        {"tileId", getTileId(tile)},
+                        {"intersectionId", trans.intersectionId}});
+                if (attrLayer) {
+                    auto attr = attrLayer->newAttribute("TransitionReference");
+                    attr->addField("TransitionReferenceType", transRefType);
+                    if (trans.numTransitions.has_value()) {
+                        auto arr = tile->newArray(trans.numTransitions.value());
+                        for (const auto &num : trans.transitionNumber.value())
+                            arr->append(num);
+                        attr->addField("transitionNumber", arr);
+                    }
                 }
             }
             /// Transition reference to a sequence of roads within the same
@@ -473,35 +453,32 @@ class FileStoreDataSource
             if (featRef.transitionPathReference.has_value()) {
                 auto transPaths = featRef.transitionPathReference.value();
                 if (!transPaths.numRoads) break;
-
                 const auto &entryRoad = transPaths.roads[0];
-                zserio::View entryRoadView(entryRoad);
-                auto feat = tile->find(
-                    "Road",
+                zserio::View v(entryRoad);
+                attrLayer = getRoadRuleslayer(
+                    tile, "Road",
                     KeyValueViewPairs{{"tileId", getTileId(tile)},
-                                      {"roadId", entryRoadView.getId()}});
-                model_ptr<AttributeLayer> attrLayer;
-                feat->attributeLayers()->forEachLayer(
-                    [&](std::string_view name,
-                        model_ptr<AttributeLayer> const &layer) -> bool {
-                        if (name == "RoadRulesLayer") {
-                            attrLayer = layer;
-                            return true;
-                        }
-                        return false;
-                    });
-                if (!attrLayer)
-                    attrLayer =
-                        feat->attributeLayers()->newLayer("RoadRulesLayer");
-                auto attr = attrLayer->newAttribute(attrName);
-                for (const auto &road : transPaths.roads) {
-                    attr->addField("transitionPathReference",
-                                   static_cast<int64_t>(road.value));
+                                      {"roadId", v.getId()}});
+                if (attrLayer) {
+                    auto attr = attrLayer->newAttribute("TransitionReference");
+                    attr->addField("TransitionReferenceType", transRefType);
+                    auto arr = tile->newArray(transPaths.numRoads);
+                    for (const auto &road : transPaths.roads)
+                        arr->append(static_cast<int64_t>(road.value));
+                    attr->addField("transitionPathReference", arr);
                 }
             }
             /// TODO: transitionGeoPathReference
+
+            /// attributeValues
+            if (attrLayer) {
+                const auto &attrRange = attrMap.featureValidities[i];
+                const auto &attrIt = attrMap.featureValuePtr[i];
+                const auto &attrVal = attrMap.attributeValues[attrIt];
+                auto attr = attrLayer->newAttribute(attrName);
+                fillAttribute(attr, attrVal);
+            }
         }
- 
     }
 
     template <typename VAL>
@@ -612,6 +589,40 @@ class FileStoreDataSource
             return id ? *id : 0;
         }
         return 0;
+    }
+
+    model_ptr<AttributeLayer>
+    getRoadRuleslayer(TileFeatureLayer::Ptr const &tile,
+                      std::string_view const &type,
+                      KeyValueViewPairs const &queryIdParts)
+    {
+        model_ptr<AttributeLayer> attrLayer;
+        auto feat = tile->find(type, queryIdParts);
+        if (feat) {
+            feat->attributeLayers()->forEachLayer(
+                [&attrLayer](std::string_view name,
+                             model_ptr<AttributeLayer> const &layer) -> bool {
+                    if (name == "RoadRulesLayer") attrLayer = layer;
+                    return attrLayer ? true : false;
+                });
+            if (!attrLayer)
+                attrLayer = feat->attributeLayers()->newLayer("RoadRulesLayer");
+        }
+        return attrLayer;
+    }
+
+    template <typename ATTR_T, typename ATTR_V>
+    void fillAttribute(
+        model_ptr<Attribute> &attr,
+        ::nds::core::attributemap::Attribute<ATTR_T, ATTR_V> const &attrVal)
+    {
+        auto valJsonStr = zserio::toJsonString(attrVal, 0);
+        auto valJson = nlohmann::json::parse(valJsonStr);
+        auto it = valJson.find("attributeValue");
+        if (it != valJson.end()) {
+            for (auto const &[k, v] : it.value().items())
+                if (!v.empty()) attr->addField(k, v.dump());
+        }
     }
 };
 
