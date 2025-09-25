@@ -9,6 +9,7 @@
 #include <nds/road/layer/RoadLayer.h>
 #include <nds/road/layer/RoadGeometryLayer.h>
 #include <nds/rules/layer/RoadRulesLayer.h>
+#include <nds/characteristics/layer/RoadCharacteristicsLayer.h>
 #include "mapget/http-datasource/datasource-server.h"
 #include "mapget/log.h"
 
@@ -31,6 +32,57 @@ struct ValidityAccessor<::nds::road::reference::types::RoadPositionValidity> {
     get(const ::nds::road::reference::types::RoadPositionValidity &v)
     {
         return v.positions;
+    }
+};
+
+template <typename T> struct TraitAttrLayer;
+
+template <>
+struct TraitAttrLayer<::nds::rules::attributes::RulesRoadRangeAttributeType> {
+    static auto
+    name(const ::nds::rules::attributes::RulesRoadRangeAttributeType &v)
+    {
+        return "RulesRoadLayer";
+    }
+};
+
+template <>
+struct TraitAttrLayer<
+    ::nds::rules::attributes::RulesRoadPositionAttributeType> {
+    static auto
+    name(const ::nds::rules::attributes::RulesRoadPositionAttributeType &v)
+    {
+        return "RulesRoadLayer";
+    }
+};
+
+template <>
+struct TraitAttrLayer<::nds::rules::attributes::RulesTransitionAttributeType> {
+    static auto
+    name(const ::nds::rules::attributes::RulesTransitionAttributeType &v)
+    {
+        return "RulesRoadLayer";
+    }
+};
+
+template <>
+struct TraitAttrLayer<
+    ::nds::characteristics::attributes::CharacsRoadRangeAttributeType> {
+    static auto
+    name(const ::nds::characteristics::attributes::CharacsRoadRangeAttributeType
+             &v)
+    {
+        return "RoadCharacteristicsLayer";
+    }
+};
+
+template <>
+struct TraitAttrLayer<
+    ::nds::characteristics::attributes::CharacsRoadPositionAttributeType> {
+    static auto name(const ::nds::characteristics::attributes::
+                         CharacsRoadPositionAttributeType &v)
+    {
+        return "RoadCharacteristicsLayer";
     }
 };
 
@@ -126,6 +178,7 @@ class FileStoreDataSource
     {
         using namespace nds::road::layer;
         using namespace nds::rules::layer;
+        using namespace nds::characteristics::layer;
 
         //* Add some ID parts that are shared by all features in the tile.
         tile->setIdPrefix({{"tileId", smart.tileId}});
@@ -149,6 +202,11 @@ class FileStoreDataSource
                 auto rulesLayer = zsDeserialize<RoadRulesLayer>(
                     buf.getBuffer(), buf.getByteSize());
                 fillByRoadRulesLayer(tile, rulesLayer);
+            }
+            if (target == "characteristics.layer.RoadCharacteristicsLayer") {
+                auto charLayer = zsDeserialize<RoadCharacteristicsLayer>(
+                    buf.getBuffer(), buf.getByteSize());
+                fillByRoadCharacteristicsLayer(tile, charLayer);
             }
         }
     }
@@ -236,6 +294,21 @@ class FileStoreDataSource
             fillByAttrMapList(tile, layer.shift,
                               *layer.transitionAttributeMaps);
         // TODO
+    }
+
+    void fillByRoadCharacteristicsLayer(
+        TileFeatureLayer::Ptr const &tile,
+        nds::characteristics::layer::RoadCharacteristicsLayer const &layer)
+    {
+        // characsRoadRangeMaps
+        if (layer.characsRoadRangeMaps)
+            fillByAttrMapList(tile, layer.shift, *layer.characsRoadRangeMaps);
+
+        // TODO: characsRoadPositionMaps
+        // TODO:characsRoadRangeSets
+        // TODO:characsRoadPositionSets
+        // TODO:characsTransitionMaps
+        // TODO:characsTransitionSets
     }
 
     // The function to load the DataSourceInfo from a JSON file
@@ -388,7 +461,7 @@ class FileStoreDataSource
                 roadId = featRef.roadId->id;
             }
             auto attrLayer =
-                getRoadRuleslayer(tile, "Road",
+                getAttributeLayer(tile, attrMap.attributeTypeCode, "Road",
                                   KeyValueViewPairs{{"tileId", getTileId(tile)},
                                                     {"roadId", roadId}});
             if (attrLayer) {
@@ -429,8 +502,8 @@ class FileStoreDataSource
             /// transitions within one intersection.
             if (featRef.intersectionTransition.has_value()) {
                 auto trans = featRef.intersectionTransition.value();
-                attrLayer = getRoadRuleslayer(
-                    tile, "Intersection",
+                attrLayer = getAttributeLayer(
+                    tile, attrMap.attributeTypeCode, "Intersection",
                     KeyValueViewPairs{
                         {"tileId", getTileId(tile)},
                         {"intersectionId", trans.intersectionId}});
@@ -447,8 +520,8 @@ class FileStoreDataSource
                 if (!transPaths.numRoads) break;
                 const auto &entryRoad = transPaths.roads[0];
                 zserio::View v(entryRoad);
-                attrLayer = getRoadRuleslayer(
-                    tile, "Road",
+                attrLayer = getAttributeLayer(
+                    tile, attrMap.attributeTypeCode, "Road",
                     KeyValueViewPairs{{"tileId", getTileId(tile)},
                                       {"roadId", v.getId()}});
                 if (attrLayer) {
@@ -582,22 +655,24 @@ class FileStoreDataSource
         return 0;
     }
 
+    template <typename ATTR_T>
     model_ptr<AttributeLayer>
-    getRoadRuleslayer(TileFeatureLayer::Ptr const &tile,
+    getAttributeLayer(TileFeatureLayer::Ptr const &tile, const ATTR_T &attrCode,
                       std::string_view const &type,
                       KeyValueViewPairs const &queryIdParts)
     {
         model_ptr<AttributeLayer> attrLayer;
         auto feat = tile->find(type, queryIdParts);
         if (feat) {
+            auto attrName = TraitAttrLayer<ATTR_T>::name(attrCode);
             feat->attributeLayers()->forEachLayer(
-                [&attrLayer](std::string_view name,
-                             model_ptr<AttributeLayer> const &layer) -> bool {
-                    if (name == "RoadRulesLayer") attrLayer = layer;
-                    return attrLayer ? true : false;
+                [&](std::string_view name,
+                    model_ptr<AttributeLayer> const &layer) -> bool {
+                    if (name == attrName) attrLayer = layer;
+                    return attrLayer ? false : true; // break loop if false
                 });
             if (!attrLayer)
-                attrLayer = feat->attributeLayers()->newLayer("RoadRulesLayer");
+                attrLayer = feat->attributeLayers()->newLayer(attrName);
         }
         return attrLayer;
     }
