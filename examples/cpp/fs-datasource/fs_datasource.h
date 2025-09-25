@@ -173,24 +173,12 @@ class FileStoreDataSource
             feat->attributes()->addBool("isArtificial", inter.isArtificial);
             feat->attributes()->addField("zLevel",
                                          static_cast<int16_t>(inter.zLevel));
-            for (const auto &roadRef : inter.connectedRoads) {
-                zserio::View v(roadRef.road);
-#if 0
-                auto attr =
-                    attrLayer->newAttribute("IntersectionRoadReference");
-                attr->addField("roadId", static_cast<int64_t>(v.getId()));
-                if (v.isPositive()) attr->addBool("isPositive", true);
-                if (v.isNegative()) attr->addBool("isNegative", true);
-                if (roadRef.angle.has_value())
-                    attr->addField("angle",
-                                   static_cast<int16_t>(roadRef.angle.value()));
-#else
-                auto ref = tile->find(
-                    "Road", KeyValueViewPairs{{"tileId", getTileId(tile)},
-                                              {"roadId", v.getId()}});
-                if (ref) feat->addRelation("connectedRoads", ref->id());
-#endif
-            }
+
+            auto attrLayer =
+                feat->attributeLayers()->newLayer("RoadRulesLayer");
+            auto attr = attrLayer->newAttribute("IntersectionRoadReference");
+            if (auto ptr = buildNode(inter.connectedRoads, tile))
+                attr->addField("connectedRoads", ptr);
         }
     }
 
@@ -384,6 +372,9 @@ class FileStoreDataSource
         using namespace ::nds::core::attributemap;
         auto attrCode = static_cast<size_t>(attrMap.attributeTypeCode);
         auto attrName = zserio::EnumTraits<ATTR_T>().names[attrCode];
+        auto attrValNodes = buildNodeList(attrMap.attributeValues, tile);
+        auto attrCondNodes = buildNodeList(attrMap.attributeConditions, tile);
+
         for (FeatureIterator i = 0; i < attrMap.feature; ++i) {
             const auto &featRef = attrMap.featureReferences[i];
             uint32_t roadId;
@@ -403,16 +394,13 @@ class FileStoreDataSource
             if (attrLayer) {
                 const auto &attrRange = attrMap.featureValidities[i];
                 const auto &attrIt = attrMap.featureValuePtr[i];
-                const auto &attrVal = attrMap.attributeValues[attrIt];
-                const auto &attrConds = attrMap.attributeConditions[attrIt];
                 auto attr = attrLayer->newAttribute(attrName);
                 if (dir != Validity::Empty) attr->validity()->newDirection(dir);
                 setAttributeValidity(attr, shift, attrRange);
-                attr->addField("attributeValue",
-                               buildNode(attrVal.attributeValue, tile));
+                attr->addField("attributeValue", attrValNodes[attrIt]);
                 /// Conditions
-                if (attrConds.numConditions)
-                    attr->addField("conditions", buildNode(attrConds, tile));
+                if (attrMap.attributeConditions[attrIt].numConditions)
+                    attr->addField("conditions", attrCondNodes[attrIt]);
             }
         }
     }
@@ -427,6 +415,10 @@ class FileStoreDataSource
         auto attrCode = static_cast<size_t>(attrMap.attributeTypeCode);
         auto attrName =
             zserio::EnumTraits<RulesTransitionAttributeType>().names[attrCode];
+
+        auto attrValNodes = buildNodeList(attrMap.attributeValues, tile);
+        auto attrCondNodes = buildNodeList(attrMap.attributeConditions, tile);
+
         for (FeatureIterator i = 0; i < attrMap.feature; ++i) {
             const auto &featRef = attrMap.featureReferences[i];
             auto transRefType = zserio::EnumTraits<TransitionReferenceType>()
@@ -444,13 +436,8 @@ class FileStoreDataSource
                         {"intersectionId", trans.intersectionId}});
                 if (attrLayer) {
                     auto attr = attrLayer->newAttribute("TransitionReference");
-                    attr->addField("TransitionReferenceType", transRefType);
-                    if (trans.numTransitions.has_value()) {
-                        auto arr = tile->newArray(trans.numTransitions.value());
-                        for (const auto &num : trans.transitionNumber.value())
-                            arr->append(num);
-                        attr->addField("transitionNumber", arr);
-                    }
+                    if (auto ptr = buildNode(trans, tile))
+                        attr->addField("intersectionTransition", ptr);
                 }
             }
             /// Transition reference to a sequence of roads within the same
@@ -466,9 +453,8 @@ class FileStoreDataSource
                                       {"roadId", v.getId()}});
                 if (attrLayer) {
                     auto attr = attrLayer->newAttribute("TransitionReference");
-                    attr->addField("TransitionReferenceType", transRefType);
-                    attr->addField("transitionPathReference",
-                                   buildNode(transPaths, tile));
+                    if (auto ptr = buildNode(transPaths, tile))
+                        attr->addField("transitionPathReference", ptr);
                 }
             }
             /// TODO: transitionGeoPathReference
@@ -477,14 +463,11 @@ class FileStoreDataSource
             if (attrLayer) {
                 const auto &attrRange = attrMap.featureValidities[i];
                 const auto &attrIt = attrMap.featureValuePtr[i];
-                const auto &attrVal = attrMap.attributeValues[attrIt];
-                const auto &attrConds = attrMap.attributeConditions[attrIt];
                 auto attr = attrLayer->newAttribute(attrName);
-                attr->addField("attributeValue",
-                               buildNode(attrVal.attributeValue, tile));
+                attr->addField("attributeValue", attrValNodes[attrIt]);
                 /// Conditions
-                if (attrConds.numConditions)
-                    attr->addField("conditions", buildNode(attrConds, tile));
+                if (attrMap.attributeConditions[attrIt].numConditions)
+                    attr->addField("conditions", attrCondNodes[attrIt]);
             }
         }
     }
@@ -620,12 +603,47 @@ class FileStoreDataSource
     }
 
     template <typename T>
+    ::zserio::Vector<simfil::ModelNode::Ptr>
+    buildNodeList(const ::zserio::Vector<T> &vec,
+                  TileFeatureLayer::Ptr const &tile)
+    {
+        ::zserio::Vector<simfil::ModelNode::Ptr> ret;
+        for (const auto &v : vec) ret.push_back(buildNode(v, tile));
+        return ret;
+    }
+
+    template <typename ATTR_T, typename ATTR_V>
+    ::zserio::Vector<simfil::ModelNode::Ptr> buildNodeList(
+        const ::zserio::Vector<
+            ::nds::core::attributemap::Attribute<ATTR_T, ATTR_V>> &vec,
+        TileFeatureLayer::Ptr const &tile)
+    {
+        ::zserio::Vector<simfil::ModelNode::Ptr> ret;
+        for (const auto &attr : vec) {
+            if (auto ptr = buildNode(attr.attributeValue, tile))
+                ret.push_back(ptr);
+        }
+        return ret;
+    }
+
+    template <typename T>
     simfil::ModelNode::Ptr buildNode(const T &v,
                                      TileFeatureLayer::Ptr const &tile)
     {
         auto str = zserio::toJsonString(v, 0);
         auto j = nlohmann::json::parse(str);
         return buildNode(j, tile);
+    }
+
+    template <typename T>
+    simfil::ModelNode::Ptr buildNode(const ::zserio::Vector<T> &vec,
+                                     TileFeatureLayer::Ptr const &tile)
+    {
+        auto array = tile->newArray(vec.size());
+        for (const auto &e : vec) {
+            if (auto ptr = buildNode(e, tile)) array->append(ptr);
+        }
+        return array;
     }
 
     simfil::ModelNode::Ptr buildNode(const nlohmann::json &j,
@@ -653,27 +671,23 @@ class FileStoreDataSource
 
         if (j.is_object()) {
             auto object = tile->newObject(j.size());
-            for (auto &&[key, value] : j.items())
-                object->addField(key, buildNode(value, tile));
+            for (auto &&[key, value] : j.items()) {
+                if (auto ptr = buildNode(value, tile))
+                    object->addField(key, ptr);
+            }
             return object;
         }
 
         if (j.is_array()) {
             auto array = tile->newArray(j.size());
-            for (const auto &value : j) array->append(buildNode(value, tile));
+            for (const auto &value : j) {
+                if (auto ptr = buildNode(value, tile)) array->append(ptr);
+            }
             return array;
         }
 
         return {};
     }
 };
-
-/// Explicit specialization template function
-template <>
-void FileStoreDataSource::fillByAttrMap(
-    TileFeatureLayer::Ptr const &tile, ::nds::core::geometry::CoordShift shift,
-    const FileStoreDataSource::RulesTransitionAttrMap &attrMap)
-{
-}
 
 } // namespace mapget
